@@ -7,7 +7,12 @@ Here is Alexei who is expert of trading bot development especially EVM, Solana a
 If you have any question for dev, contact me via telegram(https://t.me/@bitship1_1)
 
 ## Prove of Work
-Here is the bot log when I had been working on this bot [Here](https://github.com/Stuboyo77/polmarket-arbitrage-gabagool-fork/tree/main/logs)
+
+
+
+https://github.com/user-attachments/assets/1327bdc8-4b8e-4e5f-a184-aef0d51ac3ec
+
+
 
 ## Overview
 
