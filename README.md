@@ -29,8 +29,8 @@ https://github.com/user-attachments/assets/1327bdc8-4b8e-4e5f-a184-aef0d51ac3ec
 ## Install
 
 ```bash
-git clone https://github.com/Stuboyo77/polmarket-arbitrage-gabagool-fork.git
-cd polmarket-arbitrage-gabagool-fork
+git clone https://github.com/solship/Polymarket-Arbitrage-Trading-Bot.git
+cd Polymarket-Arbitrage-Trading-Bot
 npm install
 ```
 
