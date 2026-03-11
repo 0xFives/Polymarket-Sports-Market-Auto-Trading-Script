@@ -1,82 +1,107 @@
-# Kalshi + Polymarket Trading Toolkit
+# Polymarket Arbitrage Trading Bot
 
-TypeScript app for **Bitcoin 15-minute up/down** markets on [Kalshi](https://kalshi.com) and [Polymarket](https://polymarket.com): Kalshi REST API, Polymarket CLOB/Gamma, dual-venue monitoring, and cross-venue arbitrage.
+Automated prediction-based trading on Polymarket’s **15-minute Up/Down markets** (e.g. BTC). Uses a price predictor to choose direction, places a first-side limit at best ask, then hedges with a second-side limit at `0.98 − firstSidePrice`. Built with TypeScript and Polymarket’s CLOB API.
 
 ## About Developer
 Here is Alexei who is expert of trading bot development especially EVM, Solana and Prediction market such as Polymarket, Klashi, etc.
 If you have any question for dev, contact me via telegram(https://t.me/@bitship1_1)
 
 ## Prove of Work
-Please check this log to see how the bot is working [here](https://github.com/Stuboyo77/polymarket-kalshi-arbitrage-trading-bot/tree/main/logs)
+Here is the bot log when I had been working on this bot [Here](https://github.com/Stuboyo77/polmarket-arbitrage-gabagool-fork/tree/main/logs)
 
-## Features
+## Overview
 
-- **Balance** — Kalshi portfolio balance (REST).
-- **Kalshi single order** — One limit order on the first open KXBTC15M market.
-- **Dual-venue monitor** — Best-ask prices from Kalshi + Polymarket; 15m-slot logs; optional process restart at :00/:15/:30/:45; integrated arb.
-- **Cross-venue arb** — When sum of opposite sides is in `[ARB_SUM_LOW, ARB_SUM_THRESHOLD)`, place one order on each venue (at most one per leg per market).
-- **Polymarket single order** — One limit buy for the DOWN token on the current BTC 15m market.
+- **Strategy**: Predict Up/Down from live orderbook via an adaptive price predictor; buy the predicted side at best ask (GTC), then place the opposite side at `0.98 − firstSidePrice` (GTC).
+- **Markets**: Configurable list (e.g. `btc`); slugs are resolved as `{market}-updown-15m-{startOf15mUnix}` via Gamma API.
+- **Stack**: TypeScript, Node (or Bun), `@polymarket/clob-client`, WebSocket orderbook, Ethers.js for allowances/redemption.
 
-## Setup
+## Requirements
+
+- Node.js 18+ (or Bun)
+- Polygon wallet with USDC
+- RPC URL for Polygon (e.g. Alchemy) for allowances and redemption
+
+## Install
 
 ```bash
-cp .env.sample .env
-# Set KALSHI_API_KEY and KALSHI_PRIVATE_KEY_PATH or KALSHI_PRIVATE_KEY_PEM
+git clone https://github.com/Stuboyo77/polmarket-arbitrage-gabagool-fork.git
+cd polmarket-arbitrage-gabagool-fork
 npm install
 ```
 
-For Polymarket orders / arb Poly leg: set `POLYMARKET_PRIVATE_KEY` and `POLYMARKET_PROXY`. The monitor uses [polymarket-validator](https://www.npmjs.com/package/polymarket-validator) for config validation at startup.
+## Configuration
 
-## Scripts
-
-| Command | Description |
-|---------|-------------|
-| `npm start` | Run dual price monitor + arb (single-instance lock, 15m log files). |
-| `npm run balance` | Fetch and print Kalshi portfolio balance. |
-| `npm run kalshi-single-order` | Place one Kalshi limit order on first open KXBTC15M market. |
-| `npm run poly-single-order` | Place one Polymarket limit buy (DOWN token). Optional: `[price] [size]`. |
-| `npm run build` | Compile TypeScript to `dist/`. |
-
-## Environment
-
-**Kalshi (required):** `KALSHI_API_KEY`, `KALSHI_PRIVATE_KEY_PATH` or `KALSHI_PRIVATE_KEY_PEM`. Optional: `KALSHI_DEMO`, `KALSHI_BASE_PATH`.
-
-**Bot:** `KALSHI_BOT_SIDE` (yes/no), `KALSHI_BOT_PRICE_CENTS`, `KALSHI_BOT_CONTRACTS`, `KALSHI_BOT_MAX_MARKETS`, `KALSHI_BOT_DRY_RUN`.
-
-**Monitor:** `KALSHI_MONITOR_INTERVAL_MS` (default 200), `KALSHI_MONITOR_TICKER` (optional), `KALSHI_MONITOR_NO_RESTART` (disable 15m restart).
-
-**Arb:** `ARB_SUM_THRESHOLD` (default 0.92), `ARB_SUM_LOW` (default 0.75), `ARB_PRICE_BUFFER`, `ARB_SIZE`, `ARB_DRY_RUN`.
-
-**Polymarket:** `POLYMARKET_PRIVATE_KEY`, `POLYMARKET_PROXY`; optional: `POLYMARKET_CLOB_URL`, `POLYMARKET_CHAIN_ID`, `POLYMARKET_TICK_SIZE`, `POLYMARKET_NEG_RISK`, `POLYMARKET_CREDENTIAL_PATH`, `POLYMARKET_MIN_USD`.
-
-See `.env.sample` for all variables.
-
-## Monitor & arb
-
-`npm start` starts the dual monitor. It polls at `KALSHI_MONITOR_INTERVAL_MS`, logs to console and `logs/monitor_YYYY-MM-DD_HH-{00|15|30|45}.log`, and runs arb when the combined price (e.g. Kalshi UP + Polymarket DOWN) is in range. One monitor process only (`logs/monitor.lock`). Without `KALSHI_MONITOR_TICKER`, the process can restart at quarter-hour boundaries; set `KALSHI_MONITOR_NO_RESTART=true` to disable.
-
-## Examples
+Copy the example env and set at least `PRIVATE_KEY` and `COPYTRADE_MARKETS`:
 
 ```bash
-# Dry run Kalshi order
-KALSHI_BOT_DRY_RUN=true npm run kalshi-single-order
-
-# Kalshi YES @ 50¢, 2 contracts
-KALSHI_BOT_SIDE=yes KALSHI_BOT_PRICE_CENTS=50 KALSHI_BOT_CONTRACTS=2 npm run kalshi-single-order
-
-# Polymarket DOWN @ 0.45, size 10
-npm run poly-single-order 0.45 10
+cp .env.temp .env
 ```
 
-## Programmatic API
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PRIVATE_KEY` | Wallet private key | **required** |
+| `COPYTRADE_MARKETS` | Comma-separated markets (e.g. `btc`) | `btc` |
+| `COPYTRADE_SHARES` | Shares per side per trade | `5` |
+| `COPYTRADE_TICK_SIZE` | Price precision | `0.01` |
+| `COPYTRADE_PRICE_BUFFER` | Price buffer for execution | `0` |
+| `COPYTRADE_WAIT_FOR_NEXT_MARKET_START` | Wait for next 15m boundary before starting | `false` |
+| `COPYTRADE_MAX_BUY_COUNTS_PER_SIDE` | Max buys per side per market (0 = no cap) | `0` |
+| `CHAIN_ID` | Chain ID (Polygon) | `137` |
+| `CLOB_API_URL` | CLOB API base URL | `https://clob.polymarket.com` |
+| `RPC_URL` / `RPC_TOKEN` | RPC for allowances/redemption | — |
+| `BOT_MIN_USDC_BALANCE` | Min USDC to start | `1` |
+| `LOG_DIR` / `LOG_FILE_PREFIX` | Log directory and file prefix | `logs` / `bot` |
 
-- **Kalshi:** `placeOrder(ticker, side, count, priceCents, options?)` from `./bot` or `./orders`.
-- **Polymarket:** `placePolymarketOrder(tokenId, price, size, options?)` from `./polymarket-order` or `./orders`. Token IDs: `getTokenIdsForSlugCached(slug)` in `./polymarket-monitor`.
+API credentials are created on first run and stored in `src/data/credential.json`.
 
-## Stack
+## Usage
 
-Node/TypeScript, [kalshi-typescript](https://www.npmjs.com/package/kalshi-typescript), [@polymarket/clob-client](https://www.npmjs.com/package/@polymarket/clob-client), ethers, [polymarket-validator](https://www.npmjs.com/package/polymarket-validator).
+**Run the bot**
 
-## Docs
+```bash
+npm start
+# or: bun src/index.ts
+```
 
-[Kalshi API](https://docs.kalshi.com/) · [TypeScript SDK](https://docs.kalshi.com/sdks/typescript/quickstart) · [WebSockets](https://docs.kalshi.com/websockets/websocket-connection)
+**Redemption**
+
+```bash
+# Auto-redeem resolved markets (holdings file)
+npm run redeem:holdings
+# or: bun src/auto-redeem.ts [--dry-run] [--clear-holdings] [--api] [--max N]
+
+# Redeem by condition ID
+npm run redeem
+# or: bun src/redeem.ts [conditionId] [indexSets...]
+bun src/redeem.ts --check <conditionId>
+```
+
+**Development**
+
+```bash
+npx tsc --noEmit
+bun --watch src/index.ts
+```
+
+## Project structure
+
+| Path | Role |
+|------|------|
+| `src/index.ts` | Entry: credentials, CLOB, allowances, min balance, start `CopytradeArbBot`. |
+| `src/config/index.ts` | Loads `.env` and exposes config (chain, CLOB, copytrade, logging). |
+| `src/order-builder/copytrade.ts` | **CopytradeArbBot**: 15m slug resolution, WebSocket orderbook, predictor → first-side buy + second-side hedge; state in `src/data/copytrade-state.json`. |
+| `src/providers/clobclient.ts` | CLOB client singleton (credentials + `PRIVATE_KEY`). |
+| `src/providers/websocketOrderbook.ts` | WebSocket to Polymarket CLOB market channel; best bid/ask by token ID. |
+| `src/utils/pricePredictor.ts` | **AdaptivePricePredictor**: direction, confidence, signal (BUY_UP / BUY_DOWN / HOLD). |
+| `src/utils/redeem.ts` | CTF redemption, resolution checks, auto-redeem from holdings or API. |
+| `src/security/allowance.ts` | USDC and CTF approvals. |
+| `src/data/token-holding.json` | Token holdings for redemption (generated). |
+| `src/data/copytrade-state.json` | Per-slug state (prices, timestamps, buy counts). |
+
+## Risk and disclaimer
+
+Trading prediction markets involves significant risk. This software is provided as-is. Use at your own discretion and only with funds you can afford to lose.
+
+## License
+
+ISC

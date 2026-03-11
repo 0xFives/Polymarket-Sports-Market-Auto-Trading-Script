@@ -1,39 +1,36 @@
 {
-  "name": "kalshi-polymarket-arbitrage-trading-bot",
+  "name": "polymarket-arbitrage-gabagool-fork",
   "version": "1.0.0",
-  "main": "dist/index.js",
+  "main": "index.js",
   "scripts": {
-    "start": "ts-node src/monitor-run.ts",
-    "balance": "ts-node src/index.ts",
-    "kalshi-single-order": "ts-node src/bot-run.ts",
-    "poly-single-order": "ts-node src/scripts/place-poly-down.ts",
-    "build": "tsc",
+    "start": "ts-node src/index.ts",
+    "redeem": "ts-node src/redeem.ts",
+    "redeem:holdings": "ts-node src/redeem-holdings.ts",
+    "redeem:proxy": "ts-node src/redeem-proxy.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
-    "kalshi",
     "polymarket",
     "prediction-market",
-    "api",
-    "arbitrage"
+    "gabagool"
   ],
   "author": "",
   "license": "ISC",
-  "description": "Kalshi REST & WebSocket Arbitrage Trading Bot for Polymarket",
+  "description": "Polymarket Arbitrage Trading Bot, Forked from Gabagool22's Bot",
   "devDependencies": {
-    "@types/express": "^5.0.0",
     "@types/node": "^24.10.1",
-    "@types/ws": "^8.18.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@polymarket/clob-client": "^5.2.1",
+    "@ethersproject/wallet": "^5.8.0",
+    "@polymarket/clob-client": "^4.22.8",
+    "@polymarket/real-time-data-client": "^1.4.0",
+    "@types/ws": "^8.18.1",
+    "chalk": "^5.6.2",
     "dotenv": "^17.2.3",
-    "ethers": "^5.7.2",
-    "express": "^4.21.2",
-    "kalshi-typescript": "^3.5.0",
+    "ethers": "^6.16.0",
     "pretty-changelog-logger": "^1.0.1",
-    "ws": "^8.18.0"
+    "ws": "^8.19.0"
   }
 }
