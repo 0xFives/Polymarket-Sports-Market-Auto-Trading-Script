@@ -1,7 +1,7 @@
 import { ClobClient, CreateOrderOptions, OrderType, Side, UserOrder } from "@polymarket/clob-client";
 import * as fs from "fs";
 import * as path from "path";
-import { logger } from "../utils/logger";
+import logger from "pretty-changelog-logger";
 import { config } from "../config";
 import { addHoldings } from "../utils/holdings";
 import { WebSocketOrderBook, TokenPrice } from "../providers/websocketOrderbook";

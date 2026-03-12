@@ -52,7 +52,7 @@ export async function getClobClient(): Promise<ClobClient> {
     // Signature type: 0 = EOA (browser/MetaMask), 2 = proxy/smart wallet. Use EOA by default so
     // orders are signed as your wallet; only use 2 + funder when USE_PROXY_WALLET=true.
     const signatureType = config.useProxyWallet ? 2 : 0;
-    const funderAddress = config.useProxyWallet ? config.prozyWalletAddress : undefined;
+    const funderAddress = config.useProxyWallet ? config.proxyWalletAddress : undefined;
 
     // Create and cache client
     cachedClient = new ClobClient(host, chainId, wallet, apiKeyCreds, signatureType, funderAddress);

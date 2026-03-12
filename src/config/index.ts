@@ -55,7 +55,7 @@ export const config = {
     /** Use Polymarket proxy/smart wallet (set true only if you trade via proxy; default EOA) */
     useProxyWallet: envBool("USE_PROXY_WALLET", false),
     /** Proxy/Polymarket profile address (where USDC is held); only used when USE_PROXY_WALLET=true */
-    prozyWalletAddress: envString("PROXY_WALLET_ADDRESS", "")!,
+    proxyWalletAddress: envString("PROXY_WALLET_ADDRESS", "")!,
 
     /** RPC configuration (used for on-chain calls like allowance/balance/redeem). */
     rpcUrl: envString("RPC_URL"),
