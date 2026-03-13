@@ -77,6 +77,8 @@ type SimpleConfig = {
     fireAndForget: boolean; // Don't wait for order confirmation (fire-and-forget)
     // Risk management
     minBalanceUsdc: number; // Minimum balance before stopping
+    // Max buys per side per market cycle (0 = no cap)
+    maxBuyCountsPerSide: number;
 };
 
 const STATE_FILE = "src/data/copytrade-state.json";
@@ -189,8 +191,9 @@ export class CopytradeArbBot {
     private initializationPromise: Promise<void> | null = null;
 
     constructor(private client: ClobClient, private cfg: SimpleConfig) {
-        // Initialize MAX_BUY_COUNTS_PER_SIDE from config
-        this.MAX_BUY_COUNTS_PER_SIDE = config.copytrade.maxBuyCountsPerSide;
+        // Initialize MAX_BUY_COUNTS_PER_SIDE from config (treat 0 or less as "no cap")
+        const rawMax = cfg.maxBuyCountsPerSide ?? config.copytrade.maxBuyCountsPerSide;
+        this.MAX_BUY_COUNTS_PER_SIDE = typeof rawMax === "number" ? rawMax : 0;
         // Initialize WebSocket orderbook (store promise for later awaiting)
         this.initializationPromise = this.initializeWebSocket();
     }
@@ -198,11 +201,11 @@ export class CopytradeArbBot {
     static async fromEnv(client: ClobClient): Promise<CopytradeArbBot> {
         const {
             markets, sharesPerSide, tickSize, negRisk,
-            priceBuffer, fireAndForget, minBalanceUsdc
+            priceBuffer, fireAndForget, minBalanceUsdc, maxBuyCountsPerSide
         } = config.copytrade;
         const bot = new CopytradeArbBot(client, {
             markets, sharesPerSide, tickSize: tickSize as CreateOrderOptions["tickSize"],
-            negRisk, priceBuffer, fireAndForget, minBalanceUsdc,
+            negRisk, priceBuffer, fireAndForget, minBalanceUsdc, maxBuyCountsPerSide,
         });
         await bot.initializationPromise; // Await WebSocket initialization
         return bot;
@@ -787,15 +790,19 @@ export class CopytradeArbBot {
             this.tokenCountsByMarket.set(scoreKey, tokenCounts);
         }
 
+        // If MAX_BUY_COUNTS_PER_SIDE <= 0, treat as "no cap"
+        const hasPerSideLimit = this.MAX_BUY_COUNTS_PER_SIDE > 0;
+
         // Check if we've reached the limit for this side BEFORE placing order
-        // Use > instead of >= to prevent exceeding limit (if count is already at limit, don't place order)
-        if (buyToken === "UP" && tokenCounts.upTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE) {
-            logger.info(`⛔ LIMIT REACHED: UP count is ${tokenCounts.upTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE} - skipping trade`);
-            return; // Skip - limit reached
-        }
-        if (buyToken === "DOWN" && tokenCounts.downTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE) {
-            logger.info(`⛔ LIMIT REACHED: DOWN count is ${tokenCounts.downTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE} - skipping trade`);
-            return; // Skip - limit reached
+        if (hasPerSideLimit) {
+            if (buyToken === "UP" && tokenCounts.upTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE) {
+                logger.info(`⛔ LIMIT REACHED: UP count is ${tokenCounts.upTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE} - skipping trade`);
+                return; // Skip - limit reached
+            }
+            if (buyToken === "DOWN" && tokenCounts.downTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE) {
+                logger.info(`⛔ LIMIT REACHED: DOWN count is ${tokenCounts.downTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE} - skipping trade`);
+                return; // Skip - limit reached
+            }
         }
 
         // Increment count for the side we're buying ONLY (before calling buySharesWithRetry to prevent race conditions)
@@ -859,7 +866,9 @@ export class CopytradeArbBot {
         });
 
         // Check if we've reached the limit (max UP + max DOWN)
-        if (tokenCounts.upTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE && tokenCounts.downTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE) {
+        if (hasPerSideLimit &&
+            tokenCounts.upTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE &&
+            tokenCounts.downTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE) {
             this.pausedMarkets.add(scoreKey);
             logger.info(`⏸️  Market ${scoreKey} PAUSED: Reached limit (UP: ${tokenCounts.upTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE}, DOWN: ${tokenCounts.downTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE})`);
         }
@@ -973,8 +982,10 @@ export class CopytradeArbBot {
                     if (order && order.status === "FILLED") {
                         // CRITICAL: Check limit BEFORE incrementing to prevent exceeding limit
                         // This prevents race conditions where multiple limit orders fill simultaneously
-                        const wouldExceedLimit = (leg === "YES" && tokenCounts.upTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE) ||
-                            (leg === "NO" && tokenCounts.downTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE);
+                        const hasPerSideLimit = this.MAX_BUY_COUNTS_PER_SIDE > 0;
+                        const wouldExceedLimit = hasPerSideLimit &&
+                            ((leg === "YES" && tokenCounts.upTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE) ||
+                                (leg === "NO" && tokenCounts.downTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE));
 
                         if (wouldExceedLimit) {
                             logger.error(`⚠️  Limit order ${orderID} filled but would exceed limit - cancelling count update (${leg}: ${leg === "YES" ? tokenCounts.upTokenCount : tokenCounts.downTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE})`);
@@ -1003,17 +1014,11 @@ export class CopytradeArbBot {
                         logger.info(`✅ Limit order filled: ${leg} @ ${limitPrice.toFixed(4)} | UP ${tokenCounts.upTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE}, DOWN ${tokenCounts.downTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE}`);
 
                         // Check if we've reached the limit after this fill
-                        if (tokenCounts.upTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE && tokenCounts.downTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE) {
+                        if (hasPerSideLimit &&
+                            tokenCounts.upTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE &&
+                            tokenCounts.downTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE) {
                             this.pausedMarkets.add(scoreKey);
                             logger.info(`⏸️  Market ${scoreKey} PAUSED after limit order fill: UP: ${tokenCounts.upTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE}, DOWN: ${tokenCounts.downTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE}`);
-                        }
-
-                        // Also check if individual side reached limit (pause that side)
-                        if (tokenCounts.upTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE || tokenCounts.downTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE) {
-                            // Market should be paused if both sides reach limit
-                            if (tokenCounts.upTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE && tokenCounts.downTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE) {
-                                this.pausedMarkets.add(scoreKey);
-                            }
                         }
 
                         return; // Order filled, stop tracking
