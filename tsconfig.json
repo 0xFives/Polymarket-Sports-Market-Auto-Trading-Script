@@ -6,6 +6,12 @@
     "rootDir": "src",
     "outDir": "dist",
 
+    "baseUrl": ".",
+    "paths": {
+      "polymarket-onchain": ["node_modules/polymarket-onchain/src/index.ts"],
+      "polymarket-onchain/*": ["node_modules/polymarket-onchain/src/*"]
+    },
+
     "moduleResolution": "node",
     "esModuleInterop": true,
     "resolveJsonModule": true,

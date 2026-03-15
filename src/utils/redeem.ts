@@ -1,234 +1,16 @@
 import { BigNumber } from "@ethersproject/bignumber";
-import { hexZeroPad } from "@ethersproject/bytes";
 import { Wallet } from "@ethersproject/wallet";
-import { JsonRpcProvider } from "@ethersproject/providers";
-import { Contract } from "@ethersproject/contracts";
-import { Chain, getContractConfig } from "@polymarket/clob-client";
+import { Chain } from "@polymarket/clob-client";
+import {
+    redeemPositions as redeemPositionsOnChain,
+    redeemMarket as redeemMarketOnChain,
+    checkConditionResolution as checkConditionResolutionOnChain,
+    getUserTokenBalances as getUserTokenBalancesOnChain,
+} from "polymarket-onchain";
 import { logger } from "./logger";
 import { getClobClient } from "../providers/clobclient";
 import { config } from "../config";
-
-// CTF Contract ABI - functions needed for redemption and checking resolution
-const CTF_ABI = [
-    {
-        constant: false,
-        inputs: [
-            {
-                name: "collateralToken",
-                type: "address",
-            },
-            {
-                name: "parentCollectionId",
-                type: "bytes32",
-            },
-            {
-                name: "conditionId",
-                type: "bytes32",
-            },
-            {
-                name: "indexSets",
-                type: "uint256[]",
-            },
-        ],
-        name: "redeemPositions",
-        outputs: [],
-        payable: false,
-        stateMutability: "nonpayable",
-        type: "function",
-    },
-    {
-        constant: true,
-        inputs: [
-            {
-                name: "",
-                type: "bytes32",
-            },
-            {
-                name: "",
-                type: "uint256",
-            },
-        ],
-        name: "payoutNumerators",
-        outputs: [
-            {
-                name: "",
-                type: "uint256",
-            },
-        ],
-        payable: false,
-        stateMutability: "view",
-        type: "function",
-    },
-    {
-        constant: true,
-        inputs: [
-            {
-                name: "",
-                type: "bytes32",
-            },
-        ],
-        name: "payoutDenominator",
-        outputs: [
-            {
-                name: "",
-                type: "uint256",
-            },
-        ],
-        payable: false,
-        stateMutability: "view",
-        type: "function",
-    },
-    {
-        constant: true,
-        inputs: [
-            {
-                name: "conditionId",
-                type: "bytes32",
-            },
-        ],
-        name: "getOutcomeSlotCount",
-        outputs: [
-            {
-                name: "",
-                type: "uint256",
-            },
-        ],
-        payable: false,
-        stateMutability: "view",
-        type: "function",
-    },
-    {
-        constant: true,
-        inputs: [
-            {
-                name: "owner",
-                type: "address",
-            },
-            {
-                name: "id",
-                type: "uint256",
-            },
-        ],
-        name: "balanceOf",
-        outputs: [
-            {
-                name: "",
-                type: "uint256",
-            },
-        ],
-        payable: false,
-        stateMutability: "view",
-        type: "function",
-    },
-    {
-        constant: true,
-        inputs: [
-            {
-                name: "parentCollectionId",
-                type: "bytes32",
-            },
-            {
-                name: "conditionId",
-                type: "bytes32",
-            },
-            {
-                name: "indexSet",
-                type: "uint256",
-            },
-        ],
-        name: "getCollectionId",
-        outputs: [
-            {
-                name: "",
-                type: "bytes32",
-            },
-        ],
-        payable: false,
-        stateMutability: "view",
-        type: "function",
-    },
-    {
-        constant: true,
-        inputs: [
-            {
-                name: "collateralToken",
-                type: "address",
-            },
-            {
-                name: "collectionId",
-                type: "bytes32",
-            },
-        ],
-        name: "getPositionId",
-        outputs: [
-            {
-                name: "",
-                type: "uint256",
-            },
-        ],
-        payable: false,
-        stateMutability: "pure",
-        type: "function",
-    },
-];
-
-/**
- * Get RPC provider URL based on chain ID
- */
-function getRpcUrlCandidates(chainId: number): string[] {
-    const out: string[] = [];
-
-    // Highest priority: explicit override
-    if (config.rpcUrl) out.push(config.rpcUrl);
-
-    const rpcToken = config.rpcToken;
-
-    if (chainId === 137) {
-        if (rpcToken) out.push(`https://polygon-mainnet.g.alchemy.com/v2/${rpcToken}`);
-        out.push(
-            "https://polygon-rpc.com",
-            "https://rpc.ankr.com/polygon",
-            "https://polygon.llamarpc.com",
-            "https://rpc-mainnet.matic.quiknode.pro"
-        );
-        return Array.from(new Set(out));
-    }
-
-    if (chainId === 80002) {
-        if (rpcToken) out.push(`https://polygon-amoy.g.alchemy.com/v2/${rpcToken}`);
-        out.push("https://rpc-amoy.polygon.technology");
-        return Array.from(new Set(out));
-    }
-
-    throw new Error(`Unsupported chain ID: ${chainId}. Supported: 137 (Polygon), 80002 (Amoy)`);
-}
-
-async function providerWithTimeout(provider: JsonRpcProvider, timeoutMs: number): Promise<void> {
-    await Promise.race([
-        provider.getNetwork().then(() => undefined),
-        new Promise<void>((_, reject) =>
-            setTimeout(() => reject(new Error(`RPC timeout after ${timeoutMs}ms`)), timeoutMs)
-        ),
-    ]);
-}
-
-async function getWorkingProvider(chainId: number): Promise<{ provider: JsonRpcProvider; rpcUrl: string }> {
-    const candidates = getRpcUrlCandidates(chainId);
-    const errors: string[] = [];
-    for (const rpcUrl of candidates) {
-        const provider = new JsonRpcProvider(rpcUrl);
-        try {
-            await providerWithTimeout(provider, 7000);
-            return { provider, rpcUrl };
-        } catch (e) {
-            errors.push(`${rpcUrl} -> ${e instanceof Error ? e.message : String(e)}`);
-        }
-    }
-    throw new Error(
-        `Could not connect to any RPC endpoint for chainId=${chainId}. ` +
-            `Set RPC_URL in .env. Attempts:\n- ${errors.join("\n- ")}`
-    );
-}
+import { getOnChainConfig } from "../onchain-config";
 
 /**
  * Options for redeeming positions
@@ -263,94 +45,12 @@ export interface RedeemOptions {
  * ```
  */
 export async function redeemPositions(options: RedeemOptions): Promise<any> {
-    const privateKey = config.requirePrivateKey();
-    const chainId = options.chainId || ((config.chainId || Chain.POLYGON) as Chain);
-    const contractConfig = getContractConfig(chainId);
-    
-    // Get RPC URL and create provider
-    const { provider, rpcUrl } = await getWorkingProvider(chainId);
-    const wallet = new Wallet(privateKey, provider);
-    
-    const address = await wallet.getAddress();
-    
-    // Default index sets for Polymarket binary markets: [1, 2] (YES and NO)
-    const indexSets = options.indexSets || [1, 2];
-    
-    // Parent collection ID is always bytes32(0) for Polymarket
-    const parentCollectionId = "0x0000000000000000000000000000000000000000000000000000000000000000";
-    
-    // Convert conditionId to bytes32 format
-    let conditionIdBytes32: string;
-    if (options.conditionId.startsWith("0x")) {
-        // Already a hex string, ensure it's exactly 32 bytes (66 chars with 0x prefix)
-        conditionIdBytes32 = hexZeroPad(options.conditionId, 32);
-    } else {
-        // If it's a decimal string, convert to hex and pad to 32 bytes
-        const bn = BigNumber.from(options.conditionId);
-        conditionIdBytes32 = hexZeroPad(bn.toHexString(), 32);
-    }
-
-    // Create CTF contract instance
-    const ctfContract = new Contract(
-        contractConfig.conditionalTokens,
-        CTF_ABI,
-        wallet
-    );
-
-    logger.info("\n=== REDEEMING POSITIONS ===");
-    logger.info(`Condition ID: ${conditionIdBytes32}`);
-    logger.info(`Index Sets: ${indexSets.join(", ")}`);
-    logger.info(`Collateral Token: ${contractConfig.collateral}`);
-    logger.info(`Parent Collection ID: ${parentCollectionId}`);
-    logger.info(`Wallet: ${address}`);
-
-    // Configure gas options
-    let gasOptions: { gasPrice?: BigNumber; gasLimit?: number } = {};
-    try {
-        const gasPrice = await provider.getGasPrice();
-        gasOptions = {
-            gasPrice: gasPrice.mul(120).div(100), // 20% buffer
-            gasLimit: 500_000,
-        };
-    } catch (error) {
-        gasOptions = {
-            gasPrice: BigNumber.from("100000000000"), // 100 gwei
-            gasLimit: 500_000,
-        };
-    }
-
-    try {
-        // Call redeemPositions
-        logger.info("Calling redeemPositions on CTF contract...");
-        const tx = await ctfContract.redeemPositions(
-            contractConfig.collateral,
-            parentCollectionId,
-            conditionIdBytes32,
-            indexSets,
-            gasOptions
-        );
-
-        logger.info(`Transaction sent: ${tx.hash}`);
-        logger.info("Waiting for confirmation...");
-
-        // Wait for transaction to be mined
-        const receipt = await tx.wait();
-        
-        logger.info(`Transaction confirmed in block ${receipt.blockNumber}`);
-        logger.info(`Gas used: ${receipt.gasUsed.toString()}`);
-        logger.info("\n=== REDEEM COMPLETE ===");
-
-        return receipt;
-    } catch (error: any) {
-        logger.error("Failed to redeem positions", error);
-        if (error.reason) {
-            logger.error("Reason", error.reason);
-        }
-        if (error.data) {
-            logger.error("Data", error.data);
-        }
-        throw error;
-    }
+    const onChain = getOnChainConfig(options.chainId != null ? { chainId: options.chainId } : undefined);
+    return redeemPositionsOnChain({
+        ...onChain,
+        conditionId: options.conditionId,
+        indexSets: options.indexSets,
+    });
 }
 
 /**
@@ -453,76 +153,8 @@ export async function redeemMarket(
     chainId?: Chain,
     maxRetries: number = 3
 ): Promise<any> {
-    const privateKey = config.requirePrivateKey();
-
-    const chainIdValue = chainId || ((config.chainId || Chain.POLYGON) as Chain);
-    const contractConfig = getContractConfig(chainIdValue);
-    
-    // Get RPC URL and create provider
-    const { provider, rpcUrl } = await getWorkingProvider(chainIdValue);
-    const wallet = new Wallet(privateKey, provider);
-    const walletAddress = await wallet.getAddress();
-    
-    logger.info("\n=== CHECKING MARKET RESOLUTION ===");
-    
-    // Check if condition is resolved and get winning outcomes
-    const resolution = await checkConditionResolution(conditionId, chainIdValue);
-    
-    if (!resolution.isResolved) {
-        throw new Error(`Market is not yet resolved. ${resolution.reason}`);
-    }
-    
-    if (resolution.winningIndexSets.length === 0) {
-        throw new Error("Condition is resolved but no winning outcomes found");
-    }
-    
-    logger.info(`Winning indexSets: ${resolution.winningIndexSets.join(", ")}`);
-    
-    // Get user's token balances for this condition
-    logger.info("Checking your token balances...");
-    const userBalances = await getUserTokenBalances(conditionId, walletAddress, chainIdValue);
-    
-    if (userBalances.size === 0) {
-        throw new Error("You don't have any tokens for this condition to redeem");
-    }
-    
-    // Filter to only winning indexSets that user actually holds
-    const redeemableIndexSets = resolution.winningIndexSets.filter(indexSet => {
-        const balance = userBalances.get(indexSet);
-        return balance && !balance.isZero();
-    });
-    
-    if (redeemableIndexSets.length === 0) {
-        const heldIndexSets = Array.from(userBalances.keys());
-        throw new Error(
-            `You don't hold any winning tokens. ` +
-            `You hold: ${heldIndexSets.join(", ")}, ` +
-            `Winners: ${resolution.winningIndexSets.join(", ")}`
-        );
-    }
-    
-    // Log what will be redeemed
-    logger.info(`\nYou hold winning tokens for indexSets: ${redeemableIndexSets.join(", ")}`);
-    for (const indexSet of redeemableIndexSets) {
-        const balance = userBalances.get(indexSet);
-        logger.info(`  IndexSet ${indexSet}: ${balance?.toString() || "0"} tokens`);
-    }
-    
-    // Redeem only the winning outcomes user holds
-    logger.info(`\nRedeeming winning positions: ${redeemableIndexSets.join(", ")}`);
-    
-    // Use retry logic for redemption (handles RPC/network errors)
-    return retryWithBackoff(
-        async () => {
-            return await redeemPositions({
-                conditionId,
-                indexSets: redeemableIndexSets,
-                chainId: chainIdValue,
-            });
-        },
-        maxRetries,
-        2000 // 2 second initial delay, then 4s, 8s
-    );
+    const onChain = getOnChainConfig(chainId != null ? { chainId } : undefined);
+    return redeemMarketOnChain(conditionId, onChain, maxRetries);
 }
 
 /**
@@ -543,82 +175,8 @@ export async function checkConditionResolution(
     outcomeSlotCount: number;
     reason?: string;
 }> {
-    const privateKey = config.requirePrivateKey();
-
-    const chainIdValue = chainId || ((config.chainId || Chain.POLYGON) as Chain);
-    const contractConfig = getContractConfig(chainIdValue);
-    
-    // Get RPC URL and create provider
-    const { provider, rpcUrl } = await getWorkingProvider(chainIdValue);
-    const wallet = new Wallet(privateKey, provider);
-    
-    // Convert conditionId to bytes32 format
-    let conditionIdBytes32: string;
-    if (conditionId.startsWith("0x")) {
-        conditionIdBytes32 = hexZeroPad(conditionId, 32);
-    } else {
-        const bn = BigNumber.from(conditionId);
-        conditionIdBytes32 = hexZeroPad(bn.toHexString(), 32);
-    }
-
-    // Create CTF contract instance
-    const ctfContract = new Contract(
-        contractConfig.conditionalTokens,
-        CTF_ABI,
-        wallet
-    );
-
-    try {
-        // Get outcome slot count (usually 2 for binary markets)
-        const outcomeSlotCount = (await ctfContract.getOutcomeSlotCount(conditionIdBytes32)).toNumber();
-        
-        // Check payout denominator - if > 0, condition is resolved
-        const payoutDenominator = await ctfContract.payoutDenominator(conditionIdBytes32);
-        const isResolved = !payoutDenominator.isZero();
-        
-        let winningIndexSets: number[] = [];
-        let payoutNumerators: BigNumber[] = [];
-        
-        if (isResolved) {
-            // Get payout numerators for each outcome
-            payoutNumerators = [];
-            for (let i = 0; i < outcomeSlotCount; i++) {
-                const numerator = await ctfContract.payoutNumerators(conditionIdBytes32, i);
-                payoutNumerators.push(numerator);
-                
-                // If numerator > 0, this outcome won (indexSet is i+1, as indexSets are 1-indexed)
-                if (!numerator.isZero()) {
-                    winningIndexSets.push(i + 1);
-                }
-            }
-            
-            logger.info(`Condition resolved. Winning indexSets: ${winningIndexSets.join(", ")}`);
-        } else {
-            logger.info("Condition not yet resolved");
-        }
-        
-        return {
-            isResolved,
-            winningIndexSets,
-            payoutDenominator,
-            payoutNumerators,
-            outcomeSlotCount,
-            reason: isResolved 
-                ? `Condition resolved. Winning outcomes: ${winningIndexSets.join(", ")}`
-                : "Condition not yet resolved",
-        };
-    } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        logger.error("Failed to check condition resolution", error);
-        return {
-            isResolved: false,
-            winningIndexSets: [],
-            payoutDenominator: BigNumber.from(0),
-            payoutNumerators: [],
-            outcomeSlotCount: 0,
-            reason: `Error checking resolution: ${errorMsg}`,
-        };
-    }
+    const onChain = getOnChainConfig(chainId != null ? { chainId } : undefined);
+    return checkConditionResolutionOnChain(conditionId, onChain);
 }
 
 /**
@@ -634,69 +192,8 @@ export async function getUserTokenBalances(
     walletAddress: string,
     chainId?: Chain
 ): Promise<Map<number, BigNumber>> {
-    const privateKey = config.requirePrivateKey();
-
-    const chainIdValue = chainId || ((config.chainId || Chain.POLYGON) as Chain);
-    const contractConfig = getContractConfig(chainIdValue);
-    
-    // Get RPC URL and create provider
-    const { provider, rpcUrl } = await getWorkingProvider(chainIdValue);
-    const wallet = new Wallet(privateKey, provider);
-    
-    // Convert conditionId to bytes32 format
-    let conditionIdBytes32: string;
-    if (conditionId.startsWith("0x")) {
-        conditionIdBytes32 = hexZeroPad(conditionId, 32);
-    } else {
-        const bn = BigNumber.from(conditionId);
-        conditionIdBytes32 = hexZeroPad(bn.toHexString(), 32);
-    }
-
-    // Create CTF contract instance
-    const ctfContract = new Contract(
-        contractConfig.conditionalTokens,
-        CTF_ABI,
-        wallet
-    );
-
-    const balances = new Map<number, BigNumber>();
-    const parentCollectionId = "0x0000000000000000000000000000000000000000000000000000000000000000";
-    
-    try {
-        // Get outcome slot count
-        const outcomeSlotCount = (await ctfContract.getOutcomeSlotCount(conditionIdBytes32)).toNumber();
-        
-        // Check balance for each indexSet (1-indexed)
-        for (let i = 1; i <= outcomeSlotCount; i++) {
-            try {
-                // Get collection ID for this indexSet
-                const collectionId = await ctfContract.getCollectionId(
-                    parentCollectionId,
-                    conditionIdBytes32,
-                    i
-                );
-                
-                // Get position ID (token ID)
-                const positionId = await ctfContract.getPositionId(
-                    contractConfig.collateral,
-                    collectionId
-                );
-                
-                // Get balance
-                const balance = await ctfContract.balanceOf(walletAddress, positionId);
-                if (!balance.isZero()) {
-                    balances.set(i, balance);
-                }
-            } catch (error) {
-                // Skip if error (might not have tokens for this outcome)
-                continue;
-            }
-        }
-    } catch (error) {
-        logger.error("Failed to get user token balances", error);
-    }
-    
-    return balances;
+    const onChain = getOnChainConfig(chainId != null ? { chainId } : undefined);
+    return getUserTokenBalancesOnChain(conditionId, walletAddress, onChain);
 }
 
 /**
@@ -966,14 +463,9 @@ export async function getMarketsWithUserPositions(
         onlyRedeemable?: boolean; // Only return positions that are redeemable (default: false)
     }
 ): Promise<Array<{ conditionId: string; position: CurrentPosition; balances: Map<number, BigNumber> }>> {
-    const privateKey = config.requirePrivateKey();
-
     const chainIdValue = options?.chainId || ((config.chainId || Chain.POLYGON) as Chain);
-    
-    // Get RPC URL and create provider
-    const { provider, rpcUrl } = await getWorkingProvider(chainIdValue);
-    const wallet = new Wallet(privateKey, provider);
-    const walletAddress = options?.walletAddress || await wallet.getAddress();
+    const wallet = new Wallet(config.requirePrivateKey());
+    const walletAddress = options?.walletAddress || (await wallet.getAddress());
     
     logger.info(`\n=== FINDING YOUR CURRENT/ACTIVE POSITIONS ===`);
     logger.info(`Wallet: ${walletAddress}`);
@@ -1144,16 +636,10 @@ export async function redeemAllWinningMarketsFromAPI(options?: {
         error?: string;
     }>;
 }> {
-    const privateKey = config.requirePrivateKey();
-
     const chainIdValue = ((config.chainId || Chain.POLYGON) as Chain);
-    const contractConfig = getContractConfig(chainIdValue);
-    
-    // Get RPC URL and create provider
-    const { provider, rpcUrl } = await getWorkingProvider(chainIdValue);
-    const wallet = new Wallet(privateKey, provider);
+    const wallet = new Wallet(config.requirePrivateKey());
     const walletAddress = await wallet.getAddress();
-    
+
     const clobClient = await getClobClient();
     
     const maxMarkets = options?.maxMarkets || 1000;

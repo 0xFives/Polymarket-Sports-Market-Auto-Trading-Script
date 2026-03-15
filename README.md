@@ -99,7 +99,8 @@ bun --watch src/index.ts
 | `src/providers/websocketOrderbook.ts` | WebSocket to Polymarket CLOB market channel; best bid/ask by token ID. |
 | `src/utils/pricePredictor.ts` | **AdaptivePricePredictor**: direction, confidence, signal (BUY_UP / BUY_DOWN / HOLD). |
 | `src/utils/redeem.ts` | CTF redemption, resolution checks, auto-redeem from holdings or API. |
-| `src/security/allowance.ts` | USDC and CTF approvals. |
+| `src/security/allowance.ts` | USDC and CTF approvals (uses `polymarket-onchain`). |
+| `node_modules/polymarket-onchain/` | **Package**: on-chain allowances + redeem for reuse by other apps. |
 | `src/data/token-holding.json` | Token holdings for redemption (generated). |
 | `src/data/copytrade-state.json` | Per-slug state (prices, timestamps, buy counts). |
 
