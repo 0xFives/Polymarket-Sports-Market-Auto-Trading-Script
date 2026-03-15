@@ -1,6 +1,6 @@
 {
-  "name": "polymarket-arbitrage-gabagool-fork",
-  "version": "1.0.0",
+  "name": "polymarket-trading-bot",
+  "version": "1.0.1",
   "main": "index.js",
   "scripts": {
     "start": "ts-node src/index.ts",
@@ -11,12 +11,17 @@
   },
   "keywords": [
     "polymarket",
+    "polymarket-trading-bot",
+    "polymarket-bot",
     "prediction-market",
-    "gabagool"
+    "arbitrage",
+    "trading-bot",
+    "clob",
+    "polygon"
   ],
   "author": "",
   "license": "ISC",
-  "description": "Polymarket Arbitrage Trading Bot, Forked from Gabagool22's Bot",
+  "description": "Automated Polymarket trading bot for 15m Up/Down markets. Arbitrage, CLOB API, TypeScript.",
   "devDependencies": {
     "@types/node": "^24.10.1",
     "ts-node": "^10.9.2",

@@ -1,10 +1,21 @@
 # Polymarket Arbitrage Trading Bot
 
-Automated prediction-based trading on Polymarket’s **15-minute Up/Down markets** (e.g. BTC). Uses a price predictor to choose direction, places a first-side limit at best ask, then hedges with a second-side limit at `0.98 − firstSidePrice`. Built with TypeScript and Polymarket’s CLOB API.
+**Automated edge on Polymarket’s 15-minute Up/Down markets.** Predict direction from live orderbook, place the first leg at best ask, hedge with the opposite side — all without touching the UI.
 
-## About Developer
-Here is Alexei who is expert of trading bot development especially EVM, Solana and Prediction market such as Polymarket, Klashi, etc.
-If you have any question for dev, contact me via telegram(https://t.me/@bitship1_1)
+Built for traders who want to run 24/7 on markets like **BTC Up/Down 15m**: TypeScript, CLOB API, WebSocket orderbook, and a configurable adaptive predictor.
+
+---
+
+## Why This Bot?
+
+- **Capture every 15m window** — No missed rounds. The bot resolves slugs, connects to the book, and trades on your schedule.
+- **Predict then hedge** — Adaptive price predictor picks Up or Down from orderbook flow; you buy the predicted side at best ask (GTC), then place the hedge at `0.98 − firstSidePrice` (GTC).
+- **One config, many markets** — Point it at `btc` (or your list); slugs become `{market}-updown-15m-{startOf15mUnix}` via Gamma API.
+- **Full stack in one repo** — CLOB client, allowances, redemption scripts. Run the bot, then redeem resolved positions with a single command.
+
+Stop watching the clock. Let the bot handle the 15m grind.
+
+---
 
 ## Prove of Work
 
@@ -12,27 +23,36 @@ If you have any question for dev, contact me via telegram(https://t.me/@bitship1
 
 https://github.com/user-attachments/assets/1327bdc8-4b8e-4e5f-a184-aef0d51ac3ec
 
+---
 
+## Strategy at a Glance
 
-## Overview
+| What | How |
+|------|-----|
+| **Markets** | 15m Up/Down (e.g. BTC); configurable list, Gamma slug resolution |
+| **Entry** | Predict direction from live orderbook → buy predicted side at best ask (GTC) |
+| **Hedge** | Opposite side at `0.98 − firstSidePrice` (GTC) |
+| **Stack** | TypeScript, Node/Bun, `@polymarket/clob-client`, WebSocket orderbook, Ethers.js (allowances/redemption) |
 
-- **Strategy**: Predict Up/Down from live orderbook via an adaptive price predictor; buy the predicted side at best ask (GTC), then place the opposite side at `0.98 − firstSidePrice` (GTC).
-- **Markets**: Configurable list (e.g. `btc`); slugs are resolved as `{market}-updown-15m-{startOf15mUnix}` via Gamma API.
-- **Stack**: TypeScript, Node (or Bun), `@polymarket/clob-client`, WebSocket orderbook, Ethers.js for allowances/redemption.
+---
 
 ## Requirements
 
-- Node.js 18+ (or Bun)
-- Polygon wallet with USDC
-- RPC URL for Polygon (e.g. Alchemy) for allowances and redemption
+- **Node.js 20+** (or Bun)
+- **Polygon wallet** with USDC
+- **RPC URL** for Polygon (e.g. Alchemy) for allowances and redemption
+
+---
 
 ## Install
 
 ```bash
-git clone https://github.com/solship/Polymarket-Arbitrage-Trading-Bot.git
-cd Polymarket-Arbitrage-Trading-Bot
+git clone https://github.com/solship/polymarket-trading-bot.git
+cd polymarket-trading-bot
 npm install
 ```
+
+---
 
 ## Configuration
 
@@ -58,6 +78,8 @@ cp .env.temp .env
 | `LOG_DIR` / `LOG_FILE_PREFIX` | Log directory and file prefix | `logs` / `bot` |
 
 API credentials are created on first run and stored in `src/data/credential.json`.
+
+---
 
 ## Usage
 
@@ -88,7 +110,9 @@ npx tsc --noEmit
 bun --watch src/index.ts
 ```
 
-## Project structure
+---
+
+## Project Structure
 
 | Path | Role |
 |------|------|
@@ -100,13 +124,16 @@ bun --watch src/index.ts
 | `src/utils/pricePredictor.ts` | **AdaptivePricePredictor**: direction, confidence, signal (BUY_UP / BUY_DOWN / HOLD). |
 | `src/utils/redeem.ts` | CTF redemption, resolution checks, auto-redeem from holdings or API. |
 | `src/security/allowance.ts` | USDC and CTF approvals (uses `polymarket-onchain`). |
-| `node_modules/polymarket-onchain/` | **Package**: on-chain allowances + redeem for reuse by other apps. |
 | `src/data/token-holding.json` | Token holdings for redemption (generated). |
 | `src/data/copytrade-state.json` | Per-slug state (prices, timestamps, buy counts). |
 
-## Risk and disclaimer
+---
+
+## Risk & Disclaimer
 
 Trading prediction markets involves significant risk. This software is provided as-is. Use at your own discretion and only with funds you can afford to lose.
+
+---
 
 ## License
 
