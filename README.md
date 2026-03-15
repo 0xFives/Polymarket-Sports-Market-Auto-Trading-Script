@@ -47,8 +47,8 @@ https://github.com/user-attachments/assets/1327bdc8-4b8e-4e5f-a184-aef0d51ac3ec
 ## Install
 
 ```bash
-git clone https://github.com/solship/polymarket-trading-bot.git
-cd polymarket-trading-bot
+git clone https://github.com/0xFives/Polymarket-Arbitrage-Crypto-Trading-Bot-V3.git
+cd Polymarket-Arbitrage-Crypto-Trading-Bot-V3
 npm install
 ```
 
