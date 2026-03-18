@@ -8,7 +8,6 @@ This polymarket trading bot is built for traders and developers: TypeScript, Pol
 
 ## Table of Contents
 
-- [About the Developer](#about-the-developer)
 - [Why This Polymarket Trading Bot?](#why-this-polymarket-trading-bot)
 - [Proof of Work](#proof-of-work)
 - [How This Polymarket Trading Bot Works](#how-this-polymarket-trading-bot-works)
@@ -22,7 +21,6 @@ This polymarket trading bot is built for traders and developers: TypeScript, Pol
 - [Project Structure](#project-structure)
 - [Extending the Polymarket Trading Bot](#extending-the-polymarket-trading-bot)
 - [Risk & Disclaimer](#risk--disclaimer)
-- [License](#license)
 
 ---
 
@@ -34,12 +32,6 @@ This polymarket trading bot is built for traders and developers: TypeScript, Pol
 - **Full stack** — CLOB client, USDC/CTF allowances, and redemption scripts. Run the polymarket trading bot, then redeem resolved positions with one command.
 
 If you are looking for an open-source polymarket trading bot for 15m Up/Down markets, this is it.
-
----
-
-## About the Developer
-
-**Alexei** — Expert in trading bot development on EVM, Solana, and prediction markets (Polymarket, Kalshi, etc.). For questions about this polymarket trading bot: **Telegram** [@bitship1_1](https://t.me/@bitship1_1).
 
 ---
 
