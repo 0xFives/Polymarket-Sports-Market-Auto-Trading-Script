@@ -100,8 +100,8 @@ Understanding the predictor helps you tune risk and interpret logs when running 
 ## Install
 
 ```bash
-git clone https://github.com/solship/polymarket-trading-bot.git
-cd polymarket-trading-bot
+git clone https://github.com/0xFives/Polymarket-Arbitrage-Crypto-Trading-Bot-V3.git
+cd Polymarket-Arbitrage-Crypto-Trading-Bot-V3
 npm install
 ```
 
