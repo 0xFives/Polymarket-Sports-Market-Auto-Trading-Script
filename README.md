@@ -259,6 +259,6 @@ Trading prediction markets involves significant risk. This polymarket trading bo
 
 ---
 
-## License
+## Contact
 
-ISC
+[oxylabs-five](https://t.me/oxylabs_five)
