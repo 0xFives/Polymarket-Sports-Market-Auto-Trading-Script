@@ -6,7 +6,7 @@ import {
     redeemMarket as redeemMarketOnChain,
     checkConditionResolution as checkConditionResolutionOnChain,
     getUserTokenBalances as getUserTokenBalancesOnChain,
-} from "polymarket-onchain";
+} from "polymarket-onchain-sdk";
 import { logger } from "./logger";
 import { getClobClient } from "../providers/clobclient";
 import { config } from "../config";

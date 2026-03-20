@@ -8,8 +8,8 @@
 
     "baseUrl": ".",
     "paths": {
-      "polymarket-onchain": ["node_modules/polymarket-onchain/src/index.ts"],
-      "polymarket-onchain/*": ["node_modules/polymarket-onchain/src/*"]
+      "polymarket-onchain-sdk": ["node_modules/polymarket-onchain-sdk/src/index.ts"],
+      "polymarket-onchain-sdk/*": ["node_modules/polymarket-onchain-sdk/src/*"]
     },
 
     "moduleResolution": "node",

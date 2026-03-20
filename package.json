@@ -30,7 +30,7 @@
   "dependencies": {
     "@ethersproject/wallet": "^5.8.0",
     "@polymarket/clob-client": "^4.22.8",
-    "polymarket-onchain": "^1.0.2",
+    "polymarket-onchain-sdk": "^1.0.2",
     "@polymarket/real-time-data-client": "^1.4.0",
     "@types/ws": "^8.18.1",
     "chalk": "^5.6.2",

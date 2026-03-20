@@ -1,8 +1,8 @@
-import type { OnChainConfig } from "polymarket-onchain";
+import type { OnChainConfig } from "polymarket-onchain-sdk";
 import { config } from "./config";
 
 /**
- * Build OnChainConfig from app config for use with polymarket-onchain.
+ * Build OnChainConfig from app config for use with polymarket-onchain-sdk.
  * Uses the project's custom logger (src/utils/logger.ts) for onchain module logging.
  */
 export function getOnChainConfig(overrides?: Partial<OnChainConfig>): OnChainConfig {

@@ -218,7 +218,7 @@ bun --watch src/index.ts
 
 ### Security and On-Chain
 
-- **`src/security/allowance.ts`** — USDC and CTF approvals (uses `polymarket-onchain`). Called at startup so the polymarket trading bot can trade.
+- **`src/security/allowance.ts`** — USDC and CTF approvals. Called at startup so the polymarket trading bot can trade.
 - **`src/security/createCredential.ts`** / **`src/security/validatePrivateKey.ts`** — CLOB API credential creation and key validation.
 
 ### Data Files (generated at runtime)

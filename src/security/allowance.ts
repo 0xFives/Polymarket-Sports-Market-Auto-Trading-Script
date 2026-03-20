@@ -3,12 +3,12 @@ import {
   approveUSDCAllowance as approveUSDCAllowanceOnChain,
   updateClobBalanceAllowance as updateClobBalanceAllowanceOnChain,
   approveTokensAfterBuy as approveTokensAfterBuyOnChain,
-} from "polymarket-onchain";
+} from "polymarket-onchain-sdk";
 import { getOnChainConfig } from "../onchain-config";
 
 /**
  * Approve USDC and CTF to Polymarket contracts (Exchange, ConditionalTokens; optional NegRisk).
- * Delegates to polymarket-onchain with app config.
+ * Delegates to polymarket-onchain-sdk with app config.
  */
 export async function approveUSDCAllowance(): Promise<void> {
   await approveUSDCAllowanceOnChain(getOnChainConfig());
