@@ -1,4 +1,12 @@
-import { ClobClient, CreateOrderOptions, OrderType, Side, UserOrder } from "@polymarket/clob-client";
+import {
+    ClobClient,
+    CreateOrderOptions,
+    OrderType,
+    Side,
+    UserOrder,
+    UserMarketOrder,
+    type OpenOrder,
+} from "@polymarket/clob-client";
 import * as fs from "fs";
 import * as path from "path";
 import { logger } from "../utils/logger";
@@ -79,7 +87,48 @@ type SimpleConfig = {
     minBalanceUsdc: number; // Minimum balance before stopping
     // Max buys per side per market cycle (0 = no cap)
     maxBuyCountsPerSide: number;
+    /** "limit" = GTC hedge; "taker" = market order hedge */
+    hedgeSecondLeg: "limit" | "taker";
+    hedgeTakerOrderType: typeof OrderType.FOK | typeof OrderType.FAK;
+    hedgeTakerSlippage: number;
+    hedgeWaitFirstFillMs: number;
+    hedgeUnwindTimeoutMs: number;
+    hedgeUnwindPollMs: number;
 };
+
+type PredictionScoreRow = {
+    market: string;
+    slug: string;
+    startTime: number;
+    endTime: number | null;
+    upTokenCost: number;
+    downTokenCost: number;
+    upTokenCount: number;
+    downTokenCount: number;
+    totalPredictions: number;
+    correctPredictions: number;
+    trades: Array<{
+        prediction: "up" | "down";
+        predictedPrice: number;
+        actualPrice: number;
+        buyToken: "UP" | "DOWN";
+        buyPrice: number;
+        buyCost: number;
+        timestamp: number;
+        wasCorrect: boolean | null;
+    }>;
+};
+
+function parseOrderSizeMatched(order: OpenOrder | null | undefined): number {
+    if (!order) return 0;
+    const raw = order.size_matched;
+    const n = typeof raw === "string" ? parseFloat(raw) : typeof raw === "number" ? raw : 0;
+    return Number.isFinite(n) ? n : 0;
+}
+
+function sleepMs(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
+}
 
 const STATE_FILE = "src/data/copytrade-state.json";
 
@@ -201,11 +250,19 @@ export class CopytradeArbBot {
     static async fromEnv(client: ClobClient): Promise<CopytradeArbBot> {
         const {
             markets, sharesPerSide, tickSize, negRisk,
-            priceBuffer, fireAndForget, minBalanceUsdc, maxBuyCountsPerSide
+            priceBuffer, fireAndForget, minBalanceUsdc, maxBuyCountsPerSide,
+            hedgeSecondLeg, hedgeTakerOrderType, hedgeTakerSlippage, hedgeWaitFirstFillMs,
+            hedgeUnwindTimeoutMs, hedgeUnwindPollMs,
         } = config.copytrade;
         const bot = new CopytradeArbBot(client, {
             markets, sharesPerSide, tickSize: tickSize as CreateOrderOptions["tickSize"],
             negRisk, priceBuffer, fireAndForget, minBalanceUsdc, maxBuyCountsPerSide,
+            hedgeSecondLeg: hedgeSecondLeg === "taker" ? "taker" : "limit",
+            hedgeTakerOrderType: hedgeTakerOrderType === OrderType.FAK ? OrderType.FAK : OrderType.FOK,
+            hedgeTakerSlippage,
+            hedgeWaitFirstFillMs,
+            hedgeUnwindTimeoutMs,
+            hedgeUnwindPollMs,
         });
         await bot.initializationPromise; // Await WebSocket initialization
         return bot;
@@ -639,7 +696,7 @@ export class CopytradeArbBot {
         conditionId: string,
         upIdx: number,
         downIdx: number
-    ): Promise<boolean> {
+    ): Promise<{ ok: boolean; orderID?: string }> {
         return await this.buyShares(leg, tokenID, askPrice, size, state, key, row, market, slug, conditionId, upIdx, downIdx);
     }
 
@@ -660,8 +717,8 @@ export class CopytradeArbBot {
         conditionId: string,
         upIdx: number,
         downIdx: number
-    ): Promise<boolean> {
-        const limitPrice = askPrice+0.01; // Use askPrice directly for limit order
+    ): Promise<{ ok: boolean; orderID?: string }> {
+        const limitPrice = askPrice + 0.01 + this.cfg.priceBuffer;
 
         const estimatedShares = size;
 
@@ -674,28 +731,25 @@ export class CopytradeArbBot {
 
         const orderAmount = limitPrice * size;
 
-        // Log buy
         logger.info(`BUY: ${leg} ~${estimatedShares} shares @ limit ${limitPrice.toFixed(4)} (${orderAmount.toFixed(2)} USDC)`);
 
-        // Place order IMMEDIATELY (await to ensure it's placed within 10ms)
         try {
             const response = await this.client.createAndPostOrder(
                 limitOrder,
                 { tickSize: this.cfg.tickSize, negRisk: this.cfg.negRisk },
-                OrderType.GTC // Good-Till-Cancel for limit orders
+                OrderType.GTC
             );
 
             const orderID = response?.orderID;
             if (!orderID) {
                 logger.error(`BUY failed for ${leg} - no orderID returned`);
-                return false;
+                return { ok: false };
             }
-            // Order placed successfully
             logger.info(`✅ First-Side Order placed: ${leg} orderID ${orderID.substring(0, 10)}... @ ${limitPrice.toFixed(4)}`);
-            return true;
+            return { ok: true, orderID };
         } catch (e) {
             logger.error(`BUY failed for ${leg}: ${e instanceof Error ? e.message : String(e)}`);
-            return false;
+            return { ok: false };
         }
     }
 
@@ -818,9 +872,238 @@ export class CopytradeArbBot {
         const buyCost = buyPrice * this.cfg.sharesPerSide;
         logger.info(`🎯 FIRST-SIDE Trade: ${buyToken} @ ${buyPrice.toFixed(4)} (${buyCost.toFixed(2)} USDC) | UP ${tokenCounts.upTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE}, DOWN ${tokenCounts.downTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE} | Limit: ${this.MAX_BUY_COUNTS_PER_SIDE} per side`);
 
-        // Place first-side order (fire-and-forget, don't wait for response)
-        this.buySharesWithRetry(
-            buyToken === "UP" ? "YES" : "NO",
+        void this.runHedgedPairExecution({
+            market,
+            slug,
+            scoreKey,
+            tokenCounts,
+            score,
+            buyToken,
+            buyPrice,
+            buyCost,
+            tokenId,
+            tokenIds,
+            state,
+            k,
+            row,
+            upAsk,
+            downAsk,
+            prediction,
+            hasPerSideLimit,
+        }).catch((e) =>
+            logger.error(`Hedged pair flow failed: ${e instanceof Error ? e.message : String(e)}`)
+        );
+    }
+
+    /** Undo pre-trade counters when the first order never posts (no trade row or cost added yet). */
+    private revertPreOrderReservation(
+        buyToken: "UP" | "DOWN",
+        tokenCounts: { upTokenCount: number; downTokenCount: number },
+        score: PredictionScoreRow
+    ): void {
+        if (buyToken === "UP") {
+            tokenCounts.upTokenCount = Math.max(0, tokenCounts.upTokenCount - 1);
+            score.upTokenCount = Math.max(0, score.upTokenCount - 1);
+        } else {
+            tokenCounts.downTokenCount = Math.max(0, tokenCounts.downTokenCount - 1);
+            score.downTokenCount = Math.max(0, score.downTokenCount - 1);
+        }
+        score.totalPredictions = Math.max(0, score.totalPredictions - 1);
+    }
+
+    /** Undo optimistic ledger row after unwind or failed hedge (trade row + cost were recorded). */
+    private revertBookedTrade(
+        buyToken: "UP" | "DOWN",
+        buyCost: number,
+        tokenCounts: { upTokenCount: number; downTokenCount: number },
+        score: PredictionScoreRow
+    ): void {
+        if (buyToken === "UP") {
+            tokenCounts.upTokenCount = Math.max(0, tokenCounts.upTokenCount - 1);
+            score.upTokenCount = Math.max(0, score.upTokenCount - 1);
+            score.upTokenCost = Math.max(0, score.upTokenCost - buyCost);
+        } else {
+            tokenCounts.downTokenCount = Math.max(0, tokenCounts.downTokenCount - 1);
+            score.downTokenCount = Math.max(0, score.downTokenCount - 1);
+            score.downTokenCost = Math.max(0, score.downTokenCost - buyCost);
+        }
+        score.totalPredictions = Math.max(0, score.totalPredictions - 1);
+        const last = score.trades.pop();
+        if (last && last.wasCorrect !== null && last.wasCorrect) {
+            score.correctPredictions = Math.max(0, score.correctPredictions - 1);
+        }
+    }
+
+    private hasPerSideLimitActive(): boolean {
+        return this.MAX_BUY_COUNTS_PER_SIDE > 0;
+    }
+
+    private maybePauseAfterHedge(
+        scoreKey: string,
+        tokenCounts: { upTokenCount: number; downTokenCount: number },
+        hasPerSideLimit?: boolean
+    ): void {
+        const limit = hasPerSideLimit ?? this.hasPerSideLimitActive();
+        if (
+            limit &&
+            tokenCounts.upTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE &&
+            tokenCounts.downTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE
+        ) {
+            this.pausedMarkets.add(scoreKey);
+            logger.info(
+                `⏸️  Market ${scoreKey} PAUSED: Reached limit (UP: ${tokenCounts.upTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE}, DOWN: ${tokenCounts.downTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE})`
+            );
+        }
+    }
+
+    private applySecondLegFill(
+        leg: "YES" | "NO",
+        tokenCounts: { upTokenCount: number; downTokenCount: number },
+        scoreKey: string,
+        limitPrice: number,
+        estimatedShares: number
+    ): void {
+        const hasPerSideLimit = this.MAX_BUY_COUNTS_PER_SIDE > 0;
+        const wouldExceedLimit =
+            hasPerSideLimit &&
+            ((leg === "YES" && tokenCounts.upTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE) ||
+                (leg === "NO" && tokenCounts.downTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE));
+
+        if (wouldExceedLimit) {
+            logger.error(
+                `⚠️  Hedge fill would exceed per-side limit — skipping count update (${leg}: ${leg === "YES" ? tokenCounts.upTokenCount : tokenCounts.downTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE})`
+            );
+            return;
+        }
+
+        const fillCost = limitPrice * estimatedShares;
+        const score = this.predictionScores.get(scoreKey);
+        if (leg === "YES") {
+            tokenCounts.upTokenCount++;
+            if (score) {
+                score.upTokenCost += fillCost;
+                score.upTokenCount++;
+            }
+        } else {
+            tokenCounts.downTokenCount++;
+            if (score) {
+                score.downTokenCost += fillCost;
+                score.downTokenCount++;
+            }
+        }
+
+        logger.info(
+            `✅ Hedge filled: ${leg} @ ${limitPrice.toFixed(4)} | UP ${tokenCounts.upTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE}, DOWN ${tokenCounts.downTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE}`
+        );
+
+        if (
+            hasPerSideLimit &&
+            tokenCounts.upTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE &&
+            tokenCounts.downTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE
+        ) {
+            this.pausedMarkets.add(scoreKey);
+            logger.info(
+                `⏸️  Market ${scoreKey} PAUSED after hedge fill: UP: ${tokenCounts.upTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE}, DOWN: ${tokenCounts.downTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE}`
+            );
+        }
+    }
+
+    private async cancelOrderSafe(orderID: string): Promise<void> {
+        try {
+            await this.client.cancelOrder({ orderID });
+            logger.info(`🛑 Cancelled order ${orderID.substring(0, 10)}...`);
+        } catch (e) {
+            logger.error(`Cancel order failed (${orderID.substring(0, 10)}...): ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
+    private async unwindSellShares(tokenID: string, shares: number, label: string): Promise<boolean> {
+        if (!(shares > 0)) return true;
+        const rounded = Math.floor(shares * 1e6) / 1e6;
+        if (!(rounded > 0)) return true;
+        try {
+            const mo: UserMarketOrder = {
+                tokenID,
+                side: Side.SELL,
+                amount: rounded,
+                orderType: OrderType.FAK,
+            };
+            await this.client.createAndPostMarketOrder(
+                mo,
+                { tickSize: this.cfg.tickSize, negRisk: this.cfg.negRisk },
+                OrderType.FAK
+            );
+            logger.info(`🛡️ UNWIND: sold ~${rounded} ${label} shares (FAK)`);
+            return true;
+        } catch (e) {
+            logger.error(`UNWIND sell failed (${label}): ${e instanceof Error ? e.message : String(e)}`);
+            return false;
+        }
+    }
+
+    private async waitFirstLegMatched(firstOrderID: string, targetShares: number, maxWaitMs: number): Promise<number> {
+        const deadline = Date.now() + maxWaitMs;
+        let best = 0;
+        while (Date.now() < deadline) {
+            try {
+                const o = await this.client.getOrder(firstOrderID);
+                best = Math.max(best, parseOrderSizeMatched(o));
+                if (best >= targetShares - 1e-9) return best;
+            } catch {
+                /* order may not be visible yet */
+            }
+            await sleepMs(Math.min(this.cfg.hedgeUnwindPollMs, 100));
+        }
+        try {
+            const o = await this.client.getOrder(firstOrderID);
+            return Math.max(best, parseOrderSizeMatched(o));
+        } catch {
+            return best;
+        }
+    }
+
+    private async runHedgedPairExecution(ctx: {
+        market: string;
+        slug: string;
+        scoreKey: string;
+        tokenCounts: { upTokenCount: number; downTokenCount: number };
+        score: PredictionScoreRow;
+        buyToken: "UP" | "DOWN";
+        buyPrice: number;
+        buyCost: number;
+        tokenId: string;
+        tokenIds: { upTokenId: string; downTokenId: string; conditionId: string; upIdx: number; downIdx: number };
+        state: SimpleStateFile;
+        k: string;
+        row: SimpleStateRow;
+        upAsk: number;
+        downAsk: number;
+        prediction: PricePrediction;
+        hasPerSideLimit: boolean;
+    }): Promise<void> {
+        const {
+            scoreKey,
+            tokenCounts,
+            score,
+            buyToken,
+            buyPrice,
+            buyCost,
+            tokenId,
+            tokenIds,
+            state,
+            k,
+            row,
+            market,
+            slug,
+            upAsk,
+            downAsk,
+            prediction,
+            hasPerSideLimit,
+        } = ctx;
+
+        const firstLeg = buyToken === "UP" ? "YES" : "NO";
+        const first = await this.buySharesWithRetry(
+            firstLeg,
             tokenId,
             buyPrice,
             this.cfg.sharesPerSide,
@@ -834,20 +1117,11 @@ export class CopytradeArbBot {
             tokenIds.downIdx
         );
 
-        // Place second-side limit order IMMEDIATELY (within 50ms) without waiting for first order response
-        // This ensures both orders are placed almost simultaneously for better execution
+        if (!first.ok || !first.orderID) {
+            this.revertPreOrderReservation(buyToken, tokenCounts, score);
+            return;
+        }
 
-        this.placeSecondSideLimitOrder(
-            buyToken,
-            buyPrice,
-            tokenIds,
-            market,
-            slug,
-            scoreKey,
-            tokenCounts
-        );
-
-        // Track the trade cost for the side we actually bought only
         if (buyToken === "UP") {
             score.upTokenCost += buyCost;
         } else {
@@ -862,16 +1136,223 @@ export class CopytradeArbBot {
             buyPrice,
             buyCost,
             timestamp: Date.now(),
-            wasCorrect: null, // Will be evaluated at next prediction
+            wasCorrect: null,
         });
 
-        // Check if we've reached the limit (max UP + max DOWN)
-        if (hasPerSideLimit &&
-            tokenCounts.upTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE &&
-            tokenCounts.downTokenCount >= this.MAX_BUY_COUNTS_PER_SIDE) {
-            this.pausedMarkets.add(scoreKey);
-            logger.info(`⏸️  Market ${scoreKey} PAUSED: Reached limit (UP: ${tokenCounts.upTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE}, DOWN: ${tokenCounts.downTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE})`);
+        this.maybePauseAfterHedge(scoreKey, tokenCounts, hasPerSideLimit);
+
+        const firstOrderID = first.orderID;
+        const targetSize = this.cfg.sharesPerSide;
+        const oppositeAsk = buyToken === "UP" ? downAsk : upAsk;
+
+        if (this.cfg.hedgeWaitFirstFillMs > 0) {
+            await this.waitFirstLegMatched(firstOrderID, targetSize, this.cfg.hedgeWaitFirstFillMs);
         }
+
+        if (this.cfg.hedgeSecondLeg === "taker") {
+            const usdc = Math.max(1, oppositeAsk * targetSize * this.cfg.hedgeTakerSlippage);
+            const oppositeTokenId = buyToken === "UP" ? tokenIds.downTokenId : tokenIds.upTokenId;
+            const takerType = this.cfg.hedgeTakerOrderType;
+            const mo: UserMarketOrder = {
+                tokenID: oppositeTokenId,
+                side: Side.BUY,
+                amount: usdc,
+                orderType: takerType,
+            };
+            try {
+                const resp = await this.client.createAndPostMarketOrder(
+                    mo,
+                    { tickSize: this.cfg.tickSize, negRisk: this.cfg.negRisk },
+                    takerType
+                );
+                const hedgeId = resp?.orderID as string | undefined;
+                let matched = 0;
+                if (hedgeId) {
+                    for (let i = 0; i < 15; i++) {
+                        await sleepMs(120);
+                        try {
+                            const ho = await this.client.getOrder(hedgeId);
+                            matched = parseOrderSizeMatched(ho);
+                            if (matched >= targetSize - 1e-9) break;
+                            if (ho?.status === "CANCELLED" || ho?.status === "REJECTED") break;
+                        } catch {
+                            /* continue */
+                        }
+                    }
+                }
+                if (matched >= targetSize - 1e-9) {
+                    const hedgeLeg: "YES" | "NO" = buyToken === "UP" ? "NO" : "YES";
+                    const fillPx = oppositeAsk;
+                    this.applySecondLegFill(hedgeLeg, tokenCounts, scoreKey, fillPx, targetSize);
+                } else {
+                    logger.warning(
+                        `⚠️ Taker hedge did not reach full size (matched ${matched}/${targetSize}) — unwinding first leg if filled`
+                    );
+                    await this.unwindPartialFirstLeg(firstOrderID, tokenId, firstLeg, targetSize, scoreKey, buyToken, buyCost, tokenCounts, score);
+                }
+            } catch (e) {
+                logger.error(`Taker hedge failed: ${e instanceof Error ? e.message : String(e)}`);
+                await this.unwindPartialFirstLeg(firstOrderID, tokenId, firstLeg, targetSize, scoreKey, buyToken, buyCost, tokenCounts, score);
+            }
+            return;
+        }
+
+        const hedgeOrderID = await this.placeSecondSideLimitOrder(
+            buyToken,
+            buyPrice,
+            tokenIds,
+            market,
+            slug,
+            scoreKey,
+            tokenCounts
+        );
+
+        const limitPrice = 0.98 - buyPrice;
+        const oppositeSide = buyToken === "UP" ? "DOWN" : "UP";
+        const hedgeLeg: "YES" | "NO" = oppositeSide === "UP" ? "YES" : "NO";
+        const oppositeTokenId = buyToken === "UP" ? tokenIds.downTokenId : tokenIds.upTokenId;
+
+        if (!hedgeOrderID) {
+            logger.error(`❌ Second-side hedge order missing — unwinding first leg if filled`);
+            await this.unwindPartialFirstLeg(
+                firstOrderID,
+                tokenId,
+                firstLeg,
+                targetSize,
+                scoreKey,
+                buyToken,
+                buyCost,
+                tokenCounts,
+                score
+            );
+            return;
+        }
+
+        if (this.cfg.hedgeUnwindTimeoutMs > 0) {
+            await this.watchLimitHedgeAndUnwind({
+                firstOrderID,
+                hedgeOrderID,
+                firstTokenId: tokenId,
+                firstLeg,
+                buyToken,
+                targetShares: targetSize,
+                scoreKey,
+                tokenCounts,
+                hedgeLimitPrice: limitPrice,
+                buyCost,
+                score,
+            });
+        } else {
+            void this.trackLimitOrderAsync(
+                hedgeOrderID,
+                hedgeLeg,
+                oppositeTokenId,
+                tokenIds.conditionId,
+                targetSize,
+                limitPrice,
+                market,
+                slug,
+                tokenIds.upIdx,
+                tokenIds.downIdx,
+                scoreKey,
+                tokenCounts
+            ).catch(() => {});
+        }
+    }
+
+    private async unwindPartialFirstLeg(
+        firstOrderID: string,
+        firstTokenId: string,
+        firstLeg: "YES" | "NO",
+        targetSize: number,
+        scoreKey: string,
+        buyToken: "UP" | "DOWN",
+        buyCost: number,
+        tokenCounts: { upTokenCount: number; downTokenCount: number },
+        score: PredictionScoreRow
+    ): Promise<void> {
+        let matched = 0;
+        for (let i = 0; i < 20; i++) {
+            try {
+                const o = await this.client.getOrder(firstOrderID);
+                matched = parseOrderSizeMatched(o);
+                if (matched > 0) break;
+            } catch {
+                /* */
+            }
+            await sleepMs(100);
+        }
+        if (matched <= 0) {
+            logger.info(`UNWIND: no first-leg fill detected; cancelling resting first order`);
+            await this.cancelOrderSafe(firstOrderID);
+            this.revertBookedTrade(buyToken, buyCost, tokenCounts, score);
+            return;
+        }
+        await this.cancelOrderSafe(firstOrderID);
+        await this.unwindSellShares(firstTokenId, matched, firstLeg);
+        this.revertBookedTrade(buyToken, buyCost, tokenCounts, score);
+    }
+
+    private async watchLimitHedgeAndUnwind(args: {
+        firstOrderID: string;
+        hedgeOrderID: string;
+        firstTokenId: string;
+        firstLeg: "YES" | "NO";
+        buyToken: "UP" | "DOWN";
+        targetShares: number;
+        scoreKey: string;
+        tokenCounts: { upTokenCount: number; downTokenCount: number };
+        hedgeLimitPrice: number;
+        buyCost: number;
+        score: PredictionScoreRow;
+    }): Promise<void> {
+        const deadline = Date.now() + this.cfg.hedgeUnwindTimeoutMs;
+        const poll = Math.max(50, this.cfg.hedgeUnwindPollMs);
+        const hedgeLeg: "YES" | "NO" = args.buyToken === "UP" ? "NO" : "YES";
+
+        while (Date.now() < deadline) {
+            await sleepMs(poll);
+            try {
+                const ho = await this.client.getOrder(args.hedgeOrderID);
+                const hedgeMatched = parseOrderSizeMatched(ho);
+                if (hedgeMatched >= args.targetShares - 1e-9) {
+                    this.applySecondLegFill(hedgeLeg, args.tokenCounts, args.scoreKey, args.hedgeLimitPrice, args.targetShares);
+                    return;
+                }
+            } catch {
+                /* hedge order may not be visible yet */
+            }
+        }
+
+        let hedgeMatched = 0;
+        let firstMatched = 0;
+        try {
+            const ho = await this.client.getOrder(args.hedgeOrderID);
+            hedgeMatched = parseOrderSizeMatched(ho);
+        } catch {
+            /* */
+        }
+        try {
+            const fo = await this.client.getOrder(args.firstOrderID);
+            firstMatched = parseOrderSizeMatched(fo);
+        } catch {
+            /* */
+        }
+
+        if (hedgeMatched >= args.targetShares - 1e-9) {
+            this.applySecondLegFill(hedgeLeg, args.tokenCounts, args.scoreKey, args.hedgeLimitPrice, args.targetShares);
+            return;
+        }
+
+        logger.warning(
+            `🛡️ HEDGE TIMEOUT (${this.cfg.hedgeUnwindTimeoutMs}ms): hedge matched ${hedgeMatched.toFixed(4)}/${args.targetShares}, first matched ${firstMatched.toFixed(4)} — cancelling orders and unwinding directional risk`
+        );
+        await this.cancelOrderSafe(args.hedgeOrderID);
+        await this.cancelOrderSafe(args.firstOrderID);
+        if (firstMatched > 0) {
+            await this.unwindSellShares(args.firstTokenId, firstMatched, args.firstLeg);
+        }
+        this.revertBookedTrade(args.buyToken, args.buyCost, args.tokenCounts, args.score);
     }
 
     /**
@@ -885,23 +1366,19 @@ export class CopytradeArbBot {
         slug: string,
         scoreKey: string,
         tokenCounts: { upTokenCount: number; downTokenCount: number }
-    ): Promise<void> {
-        // Determine opposite side
+    ): Promise<string | undefined> {
         const oppositeSide = firstSide === "UP" ? "DOWN" : "UP";
         const oppositeTokenId = firstSide === "UP" ? tokenIds.downTokenId : tokenIds.upTokenId;
 
-        // CRITICAL: Check if market is paused FIRST
         if (this.pausedMarkets.has(scoreKey)) {
-            return; // Market is paused, don't place limit orders
+            return undefined;
         }
 
-        // Calculate limit price: (0.99 - firstSidePrice)
         const limitPrice = 0.98 - firstSidePrice;
 
-        // Ensure limit price is valid (between 0 and 1)
         if (limitPrice <= 0 || limitPrice >= 1) {
             logger.error(`⚠️  Invalid limit price calculated: ${limitPrice.toFixed(4)} (from first side price ${firstSidePrice.toFixed(4)})`);
-            return;
+            return undefined;
         }
 
         const limitOrder: UserOrder = {
@@ -912,39 +1389,23 @@ export class CopytradeArbBot {
         };
 
         try {
-            // Place order IMMEDIATELY (await to ensure it's placed within 50ms of first order)
             const response = await this.client.createAndPostOrder(
                 limitOrder,
                 { tickSize: this.cfg.tickSize, negRisk: this.cfg.negRisk },
-                OrderType.GTC // Good-Till-Cancel for limit orders
+                OrderType.GTC
             );
-            
-            const orderID = response?.orderID;
-            // Log second-side limit order placement clearly with limit info
+
+            const orderID = response?.orderID as string | undefined;
             const limitCost = limitPrice * this.cfg.sharesPerSide;
             if (orderID) {
                 logger.info(`📋 SECOND-SIDE Limit Order: ${oppositeSide} @ ${limitPrice.toFixed(4)} (${limitCost.toFixed(2)} USDC) | First-Side: ${firstSide} @ ${firstSidePrice.toFixed(4)} | Current: UP ${tokenCounts.upTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE}, DOWN ${tokenCounts.downTokenCount}/${this.MAX_BUY_COUNTS_PER_SIDE} | Limit: ${this.MAX_BUY_COUNTS_PER_SIDE} per side | OrderID: ${orderID.substring(0, 10)}...`);
-                // Track second-side limit so fills update score (downTokenCost/upTokenCost and counts)
-                const leg = oppositeSide === "UP" ? "YES" : "NO";
-                this.trackLimitOrderAsync(
-                    orderID,
-                    leg,
-                    oppositeTokenId,
-                    tokenIds.conditionId,
-                    this.cfg.sharesPerSide,
-                    limitPrice,
-                    market,
-                    slug,
-                    tokenIds.upIdx,
-                    tokenIds.downIdx,
-                    scoreKey,
-                    tokenCounts
-                ).catch(() => { /* fire-and-forget */ });
             } else {
                 logger.error(`⚠️  Second-side limit order placement returned no orderID`);
             }
+            return orderID;
         } catch (e) {
             logger.error(`❌ Failed to place limit order for ${oppositeSide} token: ${e instanceof Error ? e.message : String(e)}`);
+            return undefined;
         }
     }
 

@@ -50,7 +50,7 @@ High-level flow of the polymarket trading bot:
 2. **Market resolution** — For each market (e.g. `btc`), the polymarket trading bot computes the current 15m slug (e.g. `btc-updown-15m-1734567890`) and fetches Up/Down token IDs and `conditionId` from Gamma API.
 3. **Orderbook** — The polymarket trading bot subscribes to Polymarket’s CLOB WebSocket for those token IDs and receives real-time best bid/ask updates.
 4. **Prediction** — On each price update, an **AdaptivePricePredictor** (per market) consumes smoothed price history and outputs: direction (Up/Down), confidence, and signal (BUY_UP / BUY_DOWN / HOLD). The predictor uses momentum, volatility, trend, and optional pole (peak/trough) logic; it adapts weights with online gradient descent.
-5. **Execution** — When the polymarket trading bot gets BUY_UP or BUY_DOWN, it places a limit order on the predicted side at best ask (with optional `COPYTRADE_PRICE_BUFFER`), then places the hedge on the opposite side at `0.98 − firstSidePrice`. Orders are GTC; `COPYTRADE_FIRE_AND_FORGET` controls whether the bot waits for order confirmation.
+5. **Execution** — When the polymarket trading bot gets BUY_UP or BUY_DOWN, it places a limit order on the predicted side at best ask (with optional `COPYTRADE_PRICE_BUFFER`), then places the hedge on the opposite side at `0.98 − firstSidePrice` (GTC by default). Optional: `COPYTRADE_HEDGE_SECOND_LEG=taker` posts a market-style hedge (FOK/FAK), and `COPYTRADE_HEDGE_UNWIND_TIMEOUT_MS` can cancel an unfilled limit hedge within that window and FAK-sell any filled first-leg shares to reduce one-sided risk.
 6. **State** — Per-slug state (e.g. last prices, buy counts, conditionId) is stored in `src/data/copytrade-state.json`. The polymarket trading bot rolls to the next 15m slug at quarter-hour boundaries and re-initializes markets as needed.
 7. **Redemption** — After markets resolve, use the included scripts to redeem winnings (by holdings file or by condition ID). The polymarket trading bot does not auto-redeem; you run redemption separately.
 
@@ -113,7 +113,8 @@ npm install
 Copy the example env and set at least `PRIVATE_KEY` and `COPYTRADE_MARKETS`:
 
 ```bash
-cp .env.temp .env
+cp .env.example .env
+# or: cp .env.temp .env
 ```
 
 Minimum for running the polymarket trading bot:
@@ -137,6 +138,12 @@ Optional: set `RPC_URL` (and `RPC_TOKEN` if needed) for allowances and redemptio
 | `COPYTRADE_WAIT_FOR_NEXT_MARKET_START` | Wait for next 15m boundary before starting | `false` |
 | `COPYTRADE_MAX_BUY_COUNTS_PER_SIDE` | Max buys per side per market (0 = no cap) | `0` |
 | `COPYTRADE_FIRE_AND_FORGET` | Don’t wait for order confirmation | `true` |
+| `COPYTRADE_HEDGE_SECOND_LEG` | Hedge leg: `limit` (GTC, default) or `taker` (CLOB market FOK/FAK) | `limit` |
+| `COPYTRADE_HEDGE_TAKER_ORDER_TYPE` | With `taker`: `FOK` (fill all or cancel) or `FAK` (partial ok) | `FOK` |
+| `COPYTRADE_HEDGE_TAKER_SLIPPAGE` | Extra USDC headroom for taker hedge buy (e.g. `1.15` = 15% above ask×size) | `1.1` |
+| `COPYTRADE_HEDGE_WAIT_FIRST_FILL_MS` | Wait up to this many ms for first-leg fills before posting taker hedge (`0` = immediate) | `0` |
+| `COPYTRADE_HEDGE_UNWIND_TIMEOUT_MS` | With limit hedge: if hedge not fully filled in this window, cancel both legs and FAK-sell first-leg fills (`0` = off) | `0` |
+| `COPYTRADE_HEDGE_UNWIND_POLL_MS` | Poll interval for unwind watcher (ms) | `150` |
 | `COPYTRADE_NEG_RISK` | Use neg-risk order type | `false` |
 | `COPYTRADE_MIN_BALANCE_USDC` | Min USDC to keep trading | `1` |
 | `CHAIN_ID` | Chain ID (Polygon) | `137` |

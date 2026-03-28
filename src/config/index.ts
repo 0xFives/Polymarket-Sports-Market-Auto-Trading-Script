@@ -88,6 +88,27 @@ export const config = {
         fireAndForget: envBool("COPYTRADE_FIRE_AND_FORGET", true), // Don't wait for order confirmation (faster)
         minBalanceUsdc: envNumber("COPYTRADE_MIN_BALANCE_USDC", 1), // Minimum balance before stopping
         maxBuyCountsPerSide: envNumber("COPYTRADE_MAX_BUY_COUNTS_PER_SIDE", 0), // Maximum buy counts per side (UP/DOWN) per market before pausing
+
+        /** Second leg: "limit" (GTC, default) or "taker" (market FOK/FAK via CLOB) */
+        hedgeSecondLeg: (() => {
+            const v = (envString("COPYTRADE_HEDGE_SECOND_LEG", "limit") ?? "limit").toLowerCase();
+            return v === "taker" || v === "aggressive" || v === "market" ? "taker" : "limit";
+        })(),
+        /** FOK = fill entire size or cancel; FAK = partial fills ok */
+        hedgeTakerOrderType:
+            (envString("COPYTRADE_HEDGE_TAKER_ORDER_TYPE", "FOK") ?? "FOK").toUpperCase() === "FAK"
+                ? ("FAK" as const)
+                : ("FOK" as const),
+        /** Extra USDC headroom for taker BUY on hedge (e.g. 1.1 = 10% above ask×size) */
+        hedgeTakerSlippage: envNumber("COPYTRADE_HEDGE_TAKER_SLIPPAGE", 1.1),
+        /** Wait up to this many ms for first-leg fills before posting taker hedge (0 = post immediately) */
+        hedgeWaitFirstFillMs: envNumber("COPYTRADE_HEDGE_WAIT_FIRST_FILL_MS", 0),
+        /**
+         * If > 0 and second leg is limit: poll until hedge fills or timeout; then cancel hedge and
+         * market-sell any filled first-leg shares (FAK).
+         */
+        hedgeUnwindTimeoutMs: envNumber("COPYTRADE_HEDGE_UNWIND_TIMEOUT_MS", 0),
+        hedgeUnwindPollMs: envNumber("COPYTRADE_HEDGE_UNWIND_POLL_MS", 150),
     },
 
     /** Redeem script args via env */
